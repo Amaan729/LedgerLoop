@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..events import ORDER_PLACED, Event
+from ..events import ORDER_PLACED, Event, parse_ts
 from ..policy import Policy
 from ..state import Effect, State
 from .base import Decision, Tools, needs_review
@@ -47,9 +47,28 @@ class RiskAgent:
             "limit_cents": limit,
         }
 
+        as_of = parse_ts(event.occurred_at).date()
+        overdue = state.overdue_invoices(cid, as_of, policy.overdue_grace_days)
+        if overdue:
+            oldest = min(overdue, key=lambda inv: inv.due_date)
+            overdue_cents = sum(inv.open_cents for inv in overdue)
+            return needs_review(
+                NAME, oid, "overdue_balance",
+                f"{len(overdue)} invoice(s) over {policy.overdue_grace_days} days past due "
+                f"(${overdue_cents / 100:,.0f}, oldest {oldest.invoice_id})",
+                ["overdue_balance"], {**detail, "overdue_cents": overdue_cents, "oldest_overdue": oldest.invoice_id},
+                effects=[Effect("order.upsert", {**order, "status": "held"})], action="held",
+            )
+
         if exposure_after <= limit:
             return Decision(
                 NAME, "released", oid, True, ["within_limit"], detail,
+                effects=[Effect("order.upsert", {**order, "status": "released"})],
+            )
+        # A small overage on a customer with nothing overdue isn't worth a human's time.
+        if exposure_after * 100 <= limit * (100 + policy.over_limit_tolerance_pct):
+            return Decision(
+                NAME, "released", oid, True, ["over_limit_within_tolerance"], detail,
                 effects=[Effect("order.upsert", {**order, "status": "released"})],
             )
         return needs_review(
