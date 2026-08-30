@@ -123,7 +123,10 @@ class State:
 
     # ---- writes ---------------------------------------------------------------
 
-    def add_invoice(self, p: dict[str, Any]) -> None:
+    def add_invoice(self, p: dict[str, Any]) -> bool:
+        """Record an issued invoice. Returns False if the invoice id was already issued."""
+        if p["invoice_id"] in self.invoices:
+            return False
         inv = Invoice(
             invoice_id=p["invoice_id"],
             order_id=p["order_id"],
@@ -141,6 +144,7 @@ class State:
             if order.status == "released":
                 self._uninvoiced[order.customer_id] -= order.amount_cents
             order.invoiced = True
+        return True
 
     def _reduce_invoice(self, inv: Invoice, cents: int) -> None:
         inv.open_cents -= cents
