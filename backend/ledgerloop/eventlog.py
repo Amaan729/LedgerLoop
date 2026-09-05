@@ -83,6 +83,10 @@ def append_batch(conn: Connection, batch: list[Event]) -> list[AppendResult]:
     return [r for r in results if r is not None]
 
 
+def exists(conn: Connection, event_id: str) -> bool:
+    return conn.execute(select(db.events.c.seq).where(db.events.c.event_id == event_id)).first() is not None
+
+
 def read_events(conn: Connection, after_seq: int = 0, chunk: int = 5000) -> Iterator[Event]:
     """Stream the log in seq order."""
     last = after_seq
