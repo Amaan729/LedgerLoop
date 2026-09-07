@@ -20,6 +20,7 @@ Deterministic for a given seed.
 from __future__ import annotations
 
 import argparse
+import heapq
 import json
 import random
 from dataclasses import asdict, dataclass, field
@@ -27,7 +28,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .events import Event
+from .policy import DEFAULT_POLICY
+from .processor import Processor, default_registry
+from .state import State
 from .text import normalize_name
+from .tools.recorder import RecordingTools
 
 PREFIXES = """Acme Brightline Cobalt Summit Harbor Pioneer Evergreen Redwood Keystone Northwind Bluewater
 Ironclad Silverline Granite Meridian Atlas Orion Sterling Cascade Liberty Frontier Beacon Crescent Pinnacle
@@ -80,6 +85,10 @@ class SimConfig:
     days: int = 120
     orders_per_customer_per_day: float = 0.28
     start: str = "2026-05-01T00:00:00+00:00"
+    # Closed loop: the warehouse only ships (and so only invoices) orders the risk
+    # agent released. The simulator asks a private in-memory copy of the agents.
+    # Open loop invoices everything, which piles held orders onto AR.
+    closed_loop: bool = True
     rates: ScenarioRates = field(default_factory=ScenarioRates)
 
 
@@ -125,8 +134,18 @@ class Simulator:
         # payments scheduled for a future day: day -> list of (cid, [invoice ids])
         self.pay_schedule: dict[int, list[tuple[str, list[str]]]] = {}
         self._by_cid: dict[str, SimCustomer] = {}
+        self.oracle: Processor | None = None
+        if cfg.closed_loop:
+            self.oracle = Processor(State(), RecordingTools(default_registry()), lambda _e: DEFAULT_POLICY)
+        self._feed: list[tuple[datetime, int, str, Event]] = []
+        self._fed: set[str] = set()
+        self._oracle_seq = 0
 
     # ---- helpers ----------------------------------------------------------------
+
+    # Each event type gets its own slice of the day, so feeding the oracle "everything
+    # before today's orders" matches the order the final sorted stream will have.
+    HOURS = {"customer.applied": (6, 8), "order.placed": (8, 12), "invoice.issued": (13, 15), "payment.received": (15, 18)}
 
     def ts(self, day: int, hour_lo: int = 8, hour_hi: int = 18) -> datetime:
         seconds = self.r.randint(hour_lo * 3600, hour_hi * 3600 - 1)
@@ -135,9 +154,29 @@ class Simulator:
     def emit(self, when: datetime, type_: str, payload: dict[str, Any], event_id: str) -> None:
         order = {"customer.applied": 0, "order.placed": 1, "invoice.issued": 2, "payment.received": 3}[type_]
         ev = Event(event_id, type_, when.isoformat().replace("+00:00", "Z"), payload, source="simulator")
-        self.events.append((when, order, event_id, ev))
+        entries = [(when, order, event_id, ev)]
         if self.r.random() < self.rates.redelivered_event:
-            self.events.append((when + timedelta(seconds=self.r.randint(1, 300)), order, event_id + "~", ev))
+            entries.append((when + timedelta(seconds=self.r.randint(1, 300)), order, event_id + "~", ev))
+        for entry in entries:
+            self.events.append(entry)
+            if self.oracle is not None:
+                heapq.heappush(self._feed, entry)
+
+    def feed_oracle(self, until: datetime) -> None:
+        """Let the oracle see every event up to and including `until`."""
+        while self._feed and self._feed[0][0] <= until:
+            _, _, _, ev = heapq.heappop(self._feed)
+            if ev.event_id in self._fed:
+                continue
+            self._fed.add(ev.event_id)
+            self._oracle_seq += 1
+            self.oracle.handle(ev.with_seq(self._oracle_seq))
+
+    def released(self, order_id: str) -> bool:
+        if self.oracle is None:
+            return True
+        o = self.oracle.state.orders.get(order_id)
+        return o is not None and o.status == "released"
 
     def new_name(self) -> str:
         for _ in range(1000):
@@ -227,7 +266,7 @@ class Simulator:
                 "annual_revenue_cents": revenue,
                 "email": f"ap@{normalize_name(name).replace(' ', '')[:20]}.example",
             }
-            self.emit(self.ts(day), "customer.applied", payload, f"evt-cust-{cid}")
+            self.emit(self.ts(day, *self.HOURS["customer.applied"]), "customer.applied", payload, f"evt-cust-{cid}")
             granted = min(requested, policy_limit, 250_000_00)
             slow = r.random() < R.slow_payer
             c = SimCustomer(cid, name, tax_id, country, granted, slow, scenario, active_from=day + 1)
@@ -242,9 +281,15 @@ class Simulator:
             # payments that were scheduled for today go out first so AR is up to date
             for cid, inv_ids in self.pay_schedule.pop(day, []):
                 self.gen_payment(day, cid, inv_ids)
-            for c in active:
-                if day < c.active_from or r.random() >= self.cfg.orders_per_customer_per_day:
-                    continue
+            todays = [
+                (self.ts(day, *self.HOURS["order.placed"]), c)
+                for c in active
+                if day >= c.active_from and r.random() < self.cfg.orders_per_customer_per_day
+            ]
+            todays.sort(key=lambda t: (t[0], t[1].cid))
+            if self.oracle is not None:
+                self.feed_oracle(self.t0 + timedelta(days=day, hours=8))
+            for when, c in todays:
                 self.n_order += 1
                 oid = f"SO-{self.n_order:07d}"
                 amt = self.amount(max(500_00, c.limit // 100), max(1_000_00, c.limit // 6))
@@ -256,11 +301,12 @@ class Simulator:
                     else:
                         self.n_order -= 1
                         continue
-                when = self.ts(day)
                 self.emit(when, "order.placed", {"order_id": oid, "customer_id": c.cid, "amount_cents": amt}, f"evt-ord-{oid}")
-                self.truth["orders"][oid] = {"scenario": scenario, "slow_payer": c.slow}
-                if scenario == "over_limit":
-                    continue  # not shipped, not invoiced
+                self.feed_oracle(when)
+                shipped = scenario != "over_limit" and self.released(oid)
+                self.truth["orders"][oid] = {"scenario": scenario, "slow_payer": c.slow, "invoiced": shipped}
+                if not shipped:
+                    continue  # held orders don't ship, so they're never invoiced
                 c.uninvoiced += amt
                 inv_day = day + r.randint(1, 3)
                 if inv_day >= self.cfg.days:
@@ -269,7 +315,7 @@ class Simulator:
                 inv_id = f"INV-{100000 + self.n_inv}"
                 due = (self.t0 + timedelta(days=inv_day + 30)).date().isoformat()
                 self.emit(
-                    self.ts(inv_day),
+                    self.ts(inv_day, *self.HOURS["invoice.issued"]),
                     "invoice.issued",
                     {"invoice_id": inv_id, "order_id": oid, "customer_id": c.cid, "amount_cents": amt,
                      "due_date": due, "issued_at": (self.t0 + timedelta(days=inv_day)).date().isoformat()},
@@ -387,7 +433,7 @@ class Simulator:
         self.n_bank += 1
         pid = f"PMT-{self.n_pay:07d}"
         bank_ref = f"FED{self.n_bank:09d}"
-        when = self.ts(day)
+        when = self.ts(day, *self.HOURS["payment.received"])
         self.emit(when, "payment.received",
                   {"payment_id": pid, "payer_name": payer, "amount_cents": amount, "memo": memo, "bank_ref": bank_ref},
                   f"evt-pay-{pid}")
@@ -417,7 +463,7 @@ class Simulator:
             self.n_pay += 1
             self.n_bank += 1
             pid2 = f"PMT-{self.n_pay:07d}"
-            self.emit(self.ts(day + r.randint(2, 9)), "payment.received",
+            self.emit(self.ts(day + r.randint(2, 9), *self.HOURS["payment.received"]), "payment.received",
                       {"payment_id": pid2, "payer_name": payer, "amount_cents": total, "memo": invs[0].inv_id,
                        "bank_ref": f"FED{self.n_bank:09d}"},
                       f"evt-pay-{pid2}")
