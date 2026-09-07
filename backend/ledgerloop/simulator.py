@@ -205,8 +205,12 @@ class Simulator:
             elif scenario == "sanctions_exact":
                 name = r.choice(SANCTIONED_ENTITIES)
             elif scenario == "sanctions_near":
-                base = r.choice(SANCTIONED_ENTITIES).split()
-                name = " ".join(base[:-1] + [base[-1][:-1]])  # drop a letter off the last word
+                # one-letter respelling of the distinctive first word, e.g. Redmarsh -> Redmarch
+                words = r.choice(SANCTIONED_ENTITIES).split()
+                first = list(words[0])
+                j = r.randint(2, len(first) - 1)
+                first[j] = "e" if first[j] != "e" else "a"
+                name = " ".join(["".join(first)] + words[1:])
             elif scenario == "limit_far_above_policy":
                 requested = policy_limit * r.randint(4, 8)
             elif scenario == "high_risk_country":
