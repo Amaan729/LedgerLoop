@@ -194,6 +194,8 @@ class Simulator:
             elif scenario in ("duplicate_reapply", "duplicate_tax_id") and previous:
                 orig = r.choice(previous)
                 country = orig.country
+                # a re-application has to come after the original, or the original looks like the duplicate
+                day = min(self.cfg.days - 1, max(day, orig.active_from + r.randint(1, 20)))
                 if scenario == "duplicate_reapply":
                     # same company applying again under a slightly different legal name
                     stem = normalize_name(orig.name).title()
