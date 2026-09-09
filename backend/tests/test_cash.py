@@ -167,3 +167,21 @@ def test_decision_effects_never_over_apply():
     d = decide(pay(10_000_00, "INV-100001"), s)
     assert s.invoices["INV-100001"].open_cents == 0
     assert d.exception_kind == "overpayment"
+
+
+def test_truncated_bank_name_prefers_the_longer_customer_it_was_cut_from():
+    s = State()
+    approved_customer(s, "c1", "Driftwood Energy Inc")
+    approved_customer(s, "c2", "Driftwood Energy Solutions LLC")
+    invoice(s, "INV-300001", "c2", 1_234_56)
+    d = decide(pay(1_234_56, "", payer="DRIFTWOOD ENERGY S"), s)
+    assert d.action == "applied"
+    assert d.detail["payer_match"]["customer_id"] == "c2"
+
+
+def test_truncated_suffix_is_ignored():
+    s = State()
+    approved_customer(s, "c1", "Acme Foods Group Inc")
+    invoice(s, "INV-300001", "c1", 1_234_56)
+    d = decide(pay(1_234_56, "", payer="ACME FOODS GROUP I"), s)
+    assert d.detail["payer_match"] == {"customer_id": "c1", "score": 1.0}

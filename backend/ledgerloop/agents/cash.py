@@ -24,13 +24,36 @@ from .base import Decision, Tools, needs_review
 NAME = "cash"
 
 
+_SUFFIX_WORDS = ("inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation", "co", "company", "plc", "gmbh")
+
+
+def drop_cut_suffix(norm: str) -> str:
+    """'acme foods group i' -> 'acme foods group' when the tail is a cut-off Inc/LLC/Corp."""
+    head, _, tail = norm.rpartition(" ")
+    if head and len(tail) <= 3 and any(w.startswith(tail) for w in _SUFFIX_WORDS):
+        return head
+    return norm
+
+
+def name_score(payer_norm: str, customer_norm: str) -> float:
+    if payer_norm == customer_norm:
+        return 1.0
+    # Bank feeds cut names at a fixed width ("DRIFTWOOD ENERGY S"). A long prefix of
+    # exactly one customer's name is better evidence than raw edit similarity, which
+    # would prefer the shorter "Driftwood Energy" over "Driftwood Energy Solutions".
+    if len(payer_norm) >= 12 and customer_norm.startswith(payer_norm):
+        return 0.98
+    return similarity(payer_norm, customer_norm)
+
+
 def identify_payer(state: State, payer_name: str, threshold: float) -> tuple[Customer | None, float]:
     norm = normalize_name(payer_name)
+    variants = {norm, drop_cut_suffix(norm)}
     scored = []
     for c in state.customers_in_block(norm):
         if c.status == "rejected":
             continue
-        scored.append((similarity(norm, c.norm_name), c.customer_id, c))
+        scored.append((max(name_score(v, c.norm_name) for v in variants), c.customer_id, c))
     if not scored:
         return None, 0.0
     scored.sort(key=lambda t: (-t[0], t[1]))
