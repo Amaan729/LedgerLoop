@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import heapq
+from collections import Counter
 import json
 import random
 from dataclasses import asdict, dataclass, field
@@ -89,6 +90,12 @@ class SimConfig:
     # agent released. The simulator asks a private in-memory copy of the agents.
     # Open loop invoices everything, which piles held orders onto AR.
     closed_loop: bool = True
+    # A person works the cash exception queue a few days behind, like an AR clerk
+    # would. Without this, every stuck payment leaves an invoice open forever, the
+    # customer goes overdue, and all their later orders get held. Needs closed_loop.
+    clerk_works_cash_queue: bool = True
+    clerk_coverage: float = 0.95
+    clerk_delay_days: tuple[int, int] = (1, 3)
     rates: ScenarioRates = field(default_factory=ScenarioRates)
 
 
@@ -140,6 +147,8 @@ class Simulator:
         self._feed: list[tuple[datetime, int, str, Event]] = []
         self._fed: set[str] = set()
         self._oracle_seq = 0
+        self._clerk_seen: set[str] = set()
+        self._clerk_due: dict[int, list[str]] = {}
 
     # ---- helpers ----------------------------------------------------------------
 
@@ -152,7 +161,8 @@ class Simulator:
         return self.t0 + timedelta(days=day, seconds=seconds)
 
     def emit(self, when: datetime, type_: str, payload: dict[str, Any], event_id: str) -> None:
-        order = {"customer.applied": 0, "order.placed": 1, "invoice.issued": 2, "payment.received": 3}[type_]
+        order = {"customer.applied": 0, "order.placed": 1, "exception.resolved": 2, "invoice.issued": 3,
+                 "payment.received": 4}[type_]
         ev = Event(event_id, type_, when.isoformat().replace("+00:00", "Z"), payload, source="simulator")
         entries = [(when, order, event_id, ev)]
         if self.r.random() < self.rates.redelivered_event:
@@ -330,7 +340,60 @@ class Simulator:
                     # batch it with whatever else this customer is paying around then
                     pay_day = pay_day - pay_day % 7 + 6
                 self.schedule(pay_day, c.cid, inv_id)
+            if self.oracle is not None and self.cfg.clerk_works_cash_queue:
+                self.clerk(day)
         # anything still scheduled past the horizon stays unpaid
+
+    # ---- the human in the loop ------------------------------------------------------
+
+    def clerk(self, day: int) -> None:
+        """Work the cash exception queue. Resolutions go out between 12:00 and 13:00."""
+        self.feed_oracle(self.t0 + timedelta(days=day, hours=12))
+        for exc_id, exc in sorted(self.oracle.state.open_exceptions.items()):
+            if exc["agent"] != "cash" or exc_id in self._clerk_seen:
+                continue
+            self._clerk_seen.add(exc_id)
+            if self.r.random() < self.cfg.clerk_coverage:
+                self._clerk_due.setdefault(day + self.r.randint(*self.cfg.clerk_delay_days), []).append(exc_id)
+        for exc_id in self._clerk_due.pop(day, []):
+            exc = self.oracle.state.open_exceptions.get(exc_id)
+            if exc is None:
+                continue
+            res = self.clerk_resolution(exc)
+            self.emit(self.ts(day, 12, 13), "exception.resolved",
+                      {"exception_id": exc_id, "resolution": res, "resolved_by": "ar-clerk (simulated)"},
+                      f"evt-res-{exc_id}")
+            self.truth.setdefault("clerk", Counter())[res["action"]] += 1
+
+    def clerk_resolution(self, exc: dict[str, Any]) -> dict[str, Any]:
+        """What a clerk who can see the remittance advice would do. Uses ground truth."""
+        pid = exc["subject_id"]
+        t = self.truth["payments"].get(pid)
+        pay = self.oracle.state.payments.get(pid)
+        if t is None or pay is None:
+            return {"action": "dismiss"}
+        if t["scenario"] == "duplicate_bank_resend":
+            return {"action": "dismiss"}  # the feed repeated itself; no second payment exists
+        if not t["should_apply"]:
+            return {"action": "refund"}
+        remaining = pay.unapplied_cents
+        allocs, write_offs = [], []
+        for inv_id in t["invoices"]:
+            inv = self.oracle.state.invoices.get(inv_id)
+            if inv is None or inv.open_cents <= 0 or remaining <= 0:
+                continue
+            take = min(inv.open_cents, remaining)
+            allocs.append({"invoice_id": inv_id, "cents": take})
+            remaining -= take
+            left = inv.open_cents - take
+            if t["scenario"] == "bank_fee_short_pay" and 0 < left <= 50_00:
+                write_offs.append({"invoice_id": inv_id, "cents": left})
+        if not allocs:
+            return {"action": "on_account"}
+        out: dict[str, Any] = {"action": "apply", "allocations": allocs}
+        if write_offs:
+            out["write_offs"] = write_offs
+        return out
 
     def schedule(self, day: int, cid: str, inv_id: str) -> None:
         todays = self.pay_schedule.setdefault(day, [])
@@ -475,6 +538,7 @@ class Simulator:
         self.events.sort(key=lambda t: (t[0], t[1], t[2]))
         evs = [e for _, _, _, e in self.events]
         self.truth["config"] = {"seed": self.cfg.seed, "customers": self.cfg.customers, "days": self.cfg.days,
+                                "closed_loop": self.cfg.closed_loop, "clerk": self.cfg.clerk_works_cash_queue,
                                 "rates": asdict(self.cfg.rates)}
         return evs, self.truth
 
