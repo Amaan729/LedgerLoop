@@ -60,9 +60,9 @@ def test_short_pay_within_tolerance_writes_off_the_difference():
 
 def test_partial_payment_on_single_ref_leaves_invoice_open():
     s = world()
-    d = decide(pay(1_000_00, "INV-100003"), s)
+    d = decide(pay(1_700_00, "INV-100003"), s)
     assert d.reasons == ["reference_partial_payment"]
-    assert s.invoices["INV-100003"].open_cents == 3_000_00
+    assert s.invoices["INV-100003"].open_cents == 2_300_00
 
 
 def test_underpaying_several_refs_goes_to_review():
@@ -89,8 +89,38 @@ def test_typo_in_ref_is_repaired_against_payer_open_invoices():
 
 def test_ref_to_another_customers_invoice_is_flagged():
     s = world()
-    d = decide(pay(1_000_00, "INV-200001"), s)  # Acme paying Borealis's invoice
+    d = decide(pay(700_00, "INV-200001"), s)  # Acme paying part of Borealis's invoice
     assert d.exception_kind == "payer_invoice_mismatch"
+
+
+def test_foreign_ref_is_repaired_when_amount_matches_payers_own_invoice():
+    s = world()
+    # INV-200001 is Borealis's, but Acme's INV-100001 is one digit away and exactly $1,000
+    d = decide(pay(1_000_00, "INV-200001"), s)
+    assert d.action == "applied"
+    assert s.invoices["INV-100001"].open_cents == 0
+    assert s.invoices["INV-200001"].open_cents == 1_000_00
+
+
+def test_partial_that_equals_a_sibling_invoice_is_ambiguous():
+    s = world()
+    # $1,000 against INV-100003 ($4,000) could be a partial, or a typo for INV-100001 ($1,000)
+    d = decide(pay(1_000_00, "INV-100003"), s)
+    assert d.exception_kind == "ambiguous_reference"
+
+
+def test_ref_to_paid_invoice_is_repaired_to_sibling_that_fits():
+    s = world()
+    decide(pay(1_000_00, "INV-100001", pid="p0"), s)
+    d = decide(pay(2_500_00, "INV-100001", pid="p1"), s)  # meant INV-100002
+    assert d.action == "applied"
+    assert s.invoices["INV-100002"].open_cents == 0
+
+
+def test_partial_from_unidentified_payer_goes_to_review():
+    s = world()
+    d = decide(pay(1_500_00, "INV-100003", payer="Some Holding Company"), s)
+    assert d.exception_kind == "unverified_partial"
 
 
 def test_no_memo_single_amount_match():

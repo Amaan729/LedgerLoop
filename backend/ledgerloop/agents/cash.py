@@ -78,32 +78,81 @@ def one_edit_apart(a: str, b: str) -> bool:
     return False
 
 
+def covers(invoices: list[Invoice], amount: int, tolerance: int) -> bool:
+    """Would this payment settle these invoices (exactly, or short by at most the tolerance)?"""
+    total = sum(i.open_cents for i in {i.invoice_id: i for i in invoices}.values() if i.is_open)
+    return total > 0 and total - tolerance <= amount <= total
+
+
 def resolve_refs(
-    state: State, refs: list[str], payer: Customer | None
+    state: State, refs: list[str], payer: Customer | None, amount: int, tolerance: int
 ) -> tuple[list[Invoice], list[dict[str, str]], list[str]]:
-    """Turn parsed refs into invoices, repairing single-digit typos against the payer's open invoices."""
+    """Turn parsed refs into invoices, repairing one-character typos against the payer's open invoices.
+
+    * A ref that doesn't exist is repaired if exactly one of the payer's open
+      invoices is one edit away.
+    * A ref that exists but belongs to another customer is either a typo or a real
+      third-party payment. It's repaired only if the repaired invoices account for
+      the payment amount; otherwise the foreign invoice is kept and the caller
+      flags the mismatch.
+    """
     found: list[Invoice] = []
     repaired: list[dict[str, str]] = []
     unknown: list[str] = []
+    foreign: list[tuple[str, Invoice, list[Invoice]]] = []
     payer_open = state.open_invoices(payer.customer_id) if payer else []
     for ref in refs:
         inv = state.invoices.get(ref)
-        if inv is not None:
-            # Real invoice. If it belongs to someone other than the payer we keep it
-            # anyway and let the caller flag the mismatch rather than "fixing" it.
+        if inv is not None and (payer is None or inv.customer_id == payer.customer_id):
             found.append(inv)
             continue
-        # Only refs that don't exist anywhere get repaired, and only to a unique candidate.
         candidates = [i for i in payer_open if one_edit_apart(ref, i.invoice_id)]
-        if len(candidates) == 1:
+        if inv is not None:
+            foreign.append((ref, inv, candidates))
+        elif len(candidates) == 1:
             found.append(candidates[0])
             repaired.append({"parsed": ref, "matched": candidates[0].invoice_id})
         else:
             unknown.append(ref)
+
+    if foreign:
+        fixable = all(len(c) == 1 for _, _, c in foreign)
+        if fixable and covers(found + [c[0] for _, _, c in foreign], amount, tolerance):
+            for ref, _, c in foreign:
+                found.append(c[0])
+                repaired.append({"parsed": ref, "matched": c[0].invoice_id, "why": "foreign_ref_amount_match"})
+        else:
+            found.extend(inv for _, inv, _ in foreign)
+
     unique: dict[str, Invoice] = {}
     for inv in found:
         unique.setdefault(inv.invoice_id, inv)
     return list(unique.values()), repaired, unknown
+
+
+def repair_single_ref_by_amount(
+    state: State, inv: Invoice, customer_id: str, amount: int, tolerance: int
+) -> tuple[str, Invoice | None]:
+    """One ref whose amount doesn't settle it. Was the ref a typo for a sibling invoice?
+
+    Returns ("repair", sibling) when the ref can't be right (already paid, or
+    overpaid) and exactly one sibling one edit away fits the amount;
+    ("ambiguous", sibling) when a partial payment on the ref is also plausible;
+    ("none", None) otherwise.
+    """
+    if inv.is_open and inv.open_cents - tolerance <= amount <= inv.open_cents:
+        return "none", None
+    alt = [
+        i for i in state.open_invoices(customer_id)
+        if i.invoice_id != inv.invoice_id
+        and one_edit_apart(inv.invoice_id, i.invoice_id)
+        and 0 <= i.open_cents - amount <= tolerance
+    ]
+    if len(alt) != 1:
+        return "none", None
+    if inv.is_open and amount < inv.open_cents:
+        return "ambiguous", alt[0]
+    return "repair", alt[0]
 
 
 def find_subsets(items: list[tuple[str, int]], target: int, limit: int = 2) -> list[list[str]]:
@@ -162,13 +211,26 @@ class CashAgent:
 
         parsed = tools.call("remittance_parser", {"memo": payment["memo"]})
         payer, payer_score = identify_payer(state, p["payer_name"], policy.payer_match_threshold)
-        invoices, repaired, unknown = resolve_refs(state, parsed["refs"], payer)
+        tol = policy.short_pay_tolerance_cents
+        invoices, repaired, unknown = resolve_refs(state, parsed["refs"], payer, amount, tol)
+        presumed = None
+        if payer is None and len({i.customer_id for i in invoices}) > 1:
+            # Name didn't identify the payer but most refs point at one customer:
+            # treat them as the payer and see if the odd ref is a typo.
+            counts: dict[str, int] = {}
+            for i in invoices:
+                counts[i.customer_id] = counts.get(i.customer_id, 0) + 1
+            top = max(sorted(counts), key=lambda k: counts[k])
+            if counts[top] * 2 > len(invoices):
+                presumed = state.customers.get(top)
+                invoices, repaired, unknown = resolve_refs(state, parsed["refs"], presumed, amount, tol)
         detail: dict[str, Any] = {
             "parsed_refs": parsed["refs"],
             "parser": parsed.get("parser"),
             "repaired_refs": repaired,
             "unknown_refs": unknown,
             "payer_match": {"customer_id": payer.customer_id if payer else None, "score": round(payer_score, 3)},
+            "presumed_payer": presumed.customer_id if presumed else None,
         }
 
         if invoices:
@@ -182,7 +244,19 @@ class CashAgent:
                     f"{p['payer_name']} paid invoices belonging to {customer_id}",
                     {**detail, "invoice_owner": customer_id},
                 )
+            if len(invoices) == 1 and len(parsed["refs"]) == 1:
+                mode, alt = repair_single_ref_by_amount(state, invoices[0], customer_id, amount, tol)
+                if mode == "ambiguous":
+                    return hold(
+                        "ambiguous_reference",
+                        f"either a partial payment on {invoices[0].invoice_id} or a typo for {alt.invoice_id}",
+                        {**detail, "candidates": [invoices[0].invoice_id, alt.invoice_id]}, customer_id,
+                    )
+                if mode == "repair":
+                    repaired.append({"parsed": invoices[0].invoice_id, "matched": alt.invoice_id, "why": "sibling_amount_match"})
+                    invoices = [alt]
             open_refs = sorted((inv for inv in invoices if inv.is_open), key=lambda i: (i.due_date, i.invoice_id))
+            detail["payer_verified"] = payer is not None and payer.customer_id == customer_id
             if not open_refs:
                 return hold(
                     "invoices_already_paid",
@@ -224,6 +298,15 @@ class CashAgent:
                 return self._applied(pid, payment, customer_id, "reference_short_pay_within_tolerance",
                                      allocs, [(last_id, short)], {**detail, "short_cents": short})
             if len(open_refs) == 1:
+                if not detail.get("payer_verified"):
+                    # A partial payment is the weakest ref match: the amount doesn't
+                    # corroborate the ref. Only accept it when the payer's name agrees too.
+                    return needs_review(
+                        NAME, pid, "unverified_partial",
+                        f"partial payment on {open_refs[0].invoice_id} from a payer we couldn't identify",
+                        ["unverified_partial"], detail,
+                        effects=[Effect("payment.upsert", {**payment, "status": "review", "customer_id": customer_id, "unapplied_cents": amount})],
+                    )
                 return self._applied(pid, payment, customer_id, "reference_partial_payment",
                                      [(open_refs[0].invoice_id, amount)], [], {**detail, "remaining_cents": short})
             return needs_review(
