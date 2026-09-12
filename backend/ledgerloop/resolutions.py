@@ -96,6 +96,16 @@ def _effects_for(exc: dict[str, Any], action: str, res: dict[str, Any], state: S
                 raise InvalidResolution(f"allocations {total} exceed unapplied {pay.unapplied_cents}")
             if len(owners) != 1:
                 raise InvalidResolution("allocations span customers")
+            applied_to = {e.data["invoice_id"]: e.data["cents"] for e in effects}
+            for w in res.get("write_offs") or []:
+                inv = state.invoices.get(w.get("invoice_id", ""))
+                cents = w.get("cents")
+                if inv is None or inv.invoice_id not in applied_to:
+                    raise InvalidResolution("write-offs must be on an invoice this payment is applied to")
+                if not isinstance(cents, int) or cents <= 0 or cents > inv.open_cents - applied_to[inv.invoice_id]:
+                    raise InvalidResolution(f"bad write-off for {inv.invoice_id}")
+                effects.append(Effect("invoice.write_off", {"invoice_id": inv.invoice_id, "payment_id": pay.payment_id,
+                                                            "cents": cents, "reason": "manual"}))
             head = Effect("payment.upsert", {**base, "status": "applied", "customer_id": owners.pop(),
                                              "unapplied_cents": pay.unapplied_cents - total})
             return [head, *effects]

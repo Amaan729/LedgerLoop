@@ -131,3 +131,29 @@ def test_what_if_reports_policy_changes(engine):
         diff = replay.what_if(conn, "v2-strict")
     assert diff["changed"] == 1
     assert "risk: released:- -> held:over_limit" in diff["changes_by_type"]
+
+
+def test_manual_apply_with_write_off(engine):
+    eng = Engine(engine)
+    eng.process(story()[:3])
+    # $9,900 with no memo from an unknown payer: goes to review
+    eng.process([E("e9", "payment.received", {"payment_id": "p9", "payer_name": "Zed Holdings", "amount_cents": 9_900_00, "memo": ""})])
+    exc_id = next(iter(eng.state.open_exceptions))
+    res = {"action": "apply", "allocations": [{"invoice_id": "INV-100001", "cents": 9_900_00}],
+           "write_offs": [{"invoice_id": "INV-100001", "cents": 100_00}]}
+    eng.process([E("r9", "exception.resolved", {"exception_id": exc_id, "resolution": res, "resolved_by": "x"})])
+    inv = eng.state.invoices["INV-100001"]
+    assert inv.open_cents == 0 and inv.written_off_cents == 100_00
+    assert eng.state.payments["p9"].customer_id == "c1"
+
+
+def test_write_off_larger_than_remainder_is_rejected(engine):
+    eng = Engine(engine)
+    eng.process(story()[:3])
+    eng.process([E("e9", "payment.received", {"payment_id": "p9", "payer_name": "Zed Holdings", "amount_cents": 9_900_00, "memo": ""})])
+    exc_id = next(iter(eng.state.open_exceptions))
+    res = {"action": "apply", "allocations": [{"invoice_id": "INV-100001", "cents": 9_900_00}],
+           "write_offs": [{"invoice_id": "INV-100001", "cents": 500_00}]}
+    eng.process([E("r9", "exception.resolved", {"exception_id": exc_id, "resolution": res, "resolved_by": "x"})])
+    assert exc_id in eng.state.open_exceptions
+    assert eng.state.invoices["INV-100001"].open_cents == 10_000_00
