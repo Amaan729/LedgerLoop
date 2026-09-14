@@ -10,8 +10,6 @@ venv/
 # Local data
 *.db
 *.sqlite
-bench_results/*.json
-!bench_results/.gitkeep
 
 # Node
 node_modules/
