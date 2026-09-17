@@ -18,7 +18,7 @@ from typing import Any
 from ..events import PAYMENT_RECEIVED, Event
 from ..policy import Policy
 from ..state import Customer, Effect, Invoice, State
-from ..text import normalize_name, similarity
+from ..text import block_key, normalize_name, similarity
 from .base import Decision, Tools, needs_review
 
 NAME = "cash"
@@ -47,7 +47,20 @@ def name_score(payer_norm: str, customer_norm: str) -> float:
 
 
 def identify_payer(state: State, payer_name: str, threshold: float) -> tuple[Customer | None, float]:
+    """Memoized: the same few hundred payer strings show up over and over."""
     norm = normalize_name(payer_name)
+    key = ("payer", norm, str(threshold))
+    version = state.block_version[block_key(norm)]
+    hit = state.memo.get(key)
+    if hit is not None and hit[0] == version:
+        cid, score = hit[1]  # type: ignore[misc]
+        return (state.customers[cid] if cid else None), score
+    customer, score = _identify_payer(state, norm, threshold)
+    state.memo[key] = (version, (customer.customer_id if customer else None, score))
+    return customer, score
+
+
+def _identify_payer(state: State, norm: str, threshold: float) -> tuple[Customer | None, float]:
     variants = {norm, drop_cut_suffix(norm)}
     scored = []
     for c in state.customers_in_block(norm):

@@ -215,3 +215,15 @@ def test_truncated_suffix_is_ignored():
     invoice(s, "INV-300001", "c1", 1_234_56)
     d = decide(pay(1_234_56, "", payer="ACME FOODS GROUP I"), s)
     assert d.detail["payer_match"] == {"customer_id": "c1", "score": 1.0}
+
+
+def test_payer_memo_is_invalidated_when_a_similar_customer_appears():
+    from ledgerloop.agents.cash import identify_payer
+
+    s = State()
+    approved_customer(s, "c1", "Harbor Paper Trading Inc")
+    first, _ = identify_payer(s, "HARBOR PAPER TRADI", 0.9)
+    assert first.customer_id == "c1"
+    approved_customer(s, "c2", "Harbor Paper Trading Partners LLC")  # same block, now two plausible payers
+    second, _ = identify_payer(s, "HARBOR PAPER TRADI", 0.9)
+    assert second is None
