@@ -47,35 +47,42 @@ def name_score(payer_norm: str, customer_norm: str) -> float:
 
 
 def identify_payer(state: State, payer_name: str, threshold: float) -> tuple[Customer | None, float]:
-    """Memoized: the same few hundred payer strings show up over and over."""
+    """Best customer for a payer name, or None if nothing is close or two are too close.
+
+    The same few thousand payer strings show up over and over, so each lookup
+    caches its top two candidates. Later lookups only score customers who joined
+    the name block since then. A customer entering or leaving "rejected" resets
+    the block's caches.
+    """
     norm = normalize_name(payer_name)
-    key = ("payer", norm, str(threshold))
-    version = state.block_version[block_key(norm)]
-    hit = state.memo.get(key)
-    if hit is not None and hit[0] == version:
-        cid, score = hit[1]  # type: ignore[misc]
-        return (state.customers[cid] if cid else None), score
-    customer, score = _identify_payer(state, norm, threshold)
-    state.memo[key] = (version, (customer.customer_id if customer else None, score))
-    return customer, score
-
-
-def _identify_payer(state: State, norm: str, threshold: float) -> tuple[Customer | None, float]:
     variants = {norm, drop_cut_suffix(norm)}
-    scored = []
-    for c in state.customers_in_block(norm):
-        if c.status == "rejected":
-            continue
-        scored.append((max(name_score(v, c.norm_name) for v in variants), c.customer_id, c))
-    if not scored:
+    block = block_key(norm)
+    members = state.block_members.get(block, [])
+    reset = state.block_reset.get(block, 0)
+    key = ("payer", norm)
+    entry = state.memo.get(key)
+    if entry is None or entry["reset"] != reset:
+        entry = {"reset": reset, "seen": 0, "top": []}
+    if entry["seen"] < len(members):
+        scored = list(entry["top"])
+        for cid in members[entry["seen"]:]:
+            c = state.customers[cid]
+            if c.status == "rejected":
+                continue
+            scored.append((max(name_score(v, c.norm_name) for v in variants), cid))
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        entry = {"reset": reset, "seen": len(members), "top": scored[:2]}
+        state.memo[key] = entry
+
+    top = entry["top"]
+    if not top:
         return None, 0.0
-    scored.sort(key=lambda t: (-t[0], t[1]))
-    best_score, _, best = scored[0]
+    best_score, best_id = top[0]
     if best_score < threshold:
         return None, best_score
-    if len(scored) > 1 and best_score - scored[1][0] < 0.03:
+    if len(top) > 1 and best_score - top[1][0] < 0.03:
         return None, best_score  # two customers look equally plausible
-    return best, best_score
+    return state.customers[best_id], best_score
 
 
 def one_edit_apart(a: str, b: str) -> bool:

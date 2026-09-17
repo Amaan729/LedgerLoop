@@ -90,10 +90,13 @@ class State:
         self._open_invoices: dict[str, dict[str, None]] = defaultdict(dict)
         self._uninvoiced: dict[str, int] = defaultdict(int)
         self._payments_by_bank_ref: dict[str, str] = {}
-        # Bumped whenever a name block's membership or a member's status changes, so
-        # memoized name lookups know when they're stale. Not part of the snapshot.
-        self.block_version: dict[str, int] = defaultdict(int)
-        self.memo: dict[tuple[str, ...], tuple[int, object]] = {}
+        # Append-only member lists per name block, plus a counter bumped when a member
+        # moves in or out of "rejected". Lets name lookups be cached incrementally:
+        # a cached lookup only has to score customers added since it was computed.
+        # Derived data, not part of the snapshot.
+        self.block_members: dict[str, list[str]] = defaultdict(list)
+        self.block_reset: dict[str, int] = defaultdict(int)
+        self.memo: dict[tuple[str, ...], Any] = {}
 
     # ---- reads used by agents -------------------------------------------------
 
@@ -172,11 +175,12 @@ class State:
                 if c.tax_id:
                     self._by_tax_id.setdefault(c.tax_id, c.customer_id)
                 self._by_block[block_key(c.norm_name)].add(c.customer_id)
-                self.block_version[block_key(c.norm_name)] += 1
+                self.block_members[block_key(c.norm_name)].append(c.customer_id)
                 existing = c
-            if d.get("status", existing.status) != existing.status:
-                self.block_version[block_key(existing.norm_name)] += 1
-            existing.status = d.get("status", existing.status)
+            new_status = d.get("status", existing.status)
+            if new_status != existing.status and "rejected" in (new_status, existing.status):
+                self.block_reset[block_key(existing.norm_name)] += 1
+            existing.status = new_status
             existing.credit_limit_cents = d.get("credit_limit_cents", existing.credit_limit_cents)
         elif op == "order.upsert":
             o = self.orders.get(d["order_id"])
