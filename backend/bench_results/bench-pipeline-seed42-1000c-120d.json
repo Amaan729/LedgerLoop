@@ -1,0 +1,193 @@
+{
+  "when": "2026-09-29T02:14:34.525374+00:00",
+  "machine": {
+    "python": "3.11.15",
+    "platform": "Linux-6.18.44-fc-v37-x86_64-with-glibc2.39",
+    "cpus": 2
+  },
+  "mode": "pipeline",
+  "batch_size": 500,
+  "sim": {
+    "seed": 42,
+    "customers": 1000,
+    "days": 120,
+    "closed_loop": true,
+    "clerk": true,
+    "rates": {
+      "missing_tax_id": 0.03,
+      "duplicate_reapply": 0.03,
+      "duplicate_tax_id": 0.01,
+      "sanctions_exact": 0.005,
+      "sanctions_near": 0.005,
+      "limit_far_above_policy": 0.03,
+      "high_risk_country": 0.005,
+      "slow_payer": 0.06,
+      "push_over_limit": 0.3,
+      "round_amount": 0.1,
+      "multi_invoice_wire": 0.1,
+      "ref_format_variant": 0.12,
+      "ocr_letter_swap": 0.03,
+      "digit_typo": 0.03,
+      "no_memo": 0.12,
+      "bank_fee_short_pay": 0.05,
+      "partial_payment": 0.02,
+      "overpayment": 0.01,
+      "parent_company_payer": 0.02,
+      "truncated_payer_name": 0.25,
+      "duplicate_bank_resend": 0.005,
+      "double_payment": 0.005,
+      "redelivered_event": 0.01
+    }
+  },
+  "events": 55571,
+  "events_by_type": {
+    "customer.applied": 1000,
+    "exception.resolved": 605,
+    "invoice.issued": 19786,
+    "order.placed": 21461,
+    "payment.received": 12149
+  },
+  "throughput": {
+    "elapsed_s": 13.834,
+    "events_per_s": 4017,
+    "batch_p50_ms": 113.8,
+    "batch_p99_ms": 221.6
+  },
+  "stream": {
+    "lag": {
+      "pending": 0,
+      "lag": 0
+    },
+    "dead_letters": 0
+  },
+  "auto_resolution": {
+    "overall": 0.9466,
+    "by_agent": {
+      "onboarding": 0.904,
+      "risk": 0.9496,
+      "cash": 0.9449
+    },
+    "decisions": 34610,
+    "auto_resolved": 32763
+  },
+  "exceptions": {
+    "open_by_kind": {
+      "limit_far_above_policy": 22,
+      "high_risk_country": 8,
+      "overpayment": 12,
+      "over_limit": 660,
+      "invoices_already_paid": 9,
+      "duplicate_tax_id": 7,
+      "unknown_payer": 38,
+      "sanctions_near_match": 3,
+      "overdue_balance": 422,
+      "missing_tax_id": 27,
+      "unverified_partial": 2,
+      "duplicate_bank_ref": 3,
+      "possible_duplicate": 29
+    },
+    "resolved_by_clerk": 605
+  },
+  "correctness": {
+    "overall_auto_precision": 0.99991,
+    "wrong_auto_decisions": 3,
+    "cash": {
+      "auto": 11480,
+      "auto_correct": 11479,
+      "review": 669,
+      "review_caught_bad_payment": 110,
+      "auto_wrong": 1,
+      "auto_precision": 0.99991
+    },
+    "onboarding": {
+      "total": 1000,
+      "auto": 904,
+      "auto_precision": 1.0
+    },
+    "risk": {
+      "total": 21461,
+      "auto": 20379,
+      "released_within_tolerance": 178,
+      "auto_wrong": 2,
+      "auto_precision": 0.9999
+    },
+    "cash_by_scenario": {
+      "bank_fee_short_pay": {
+        "total": 575,
+        "auto": 575,
+        "auto_rate": 1.0
+      },
+      "clean": {
+        "total": 6340,
+        "auto": 6337,
+        "auto_rate": 1.0
+      },
+      "digit_typo": {
+        "total": 349,
+        "auto": 296,
+        "auto_rate": 0.848
+      },
+      "double_payment": {
+        "total": 50,
+        "auto": 1,
+        "auto_wrong": 1,
+        "auto_rate": 0.02
+      },
+      "duplicate_bank_resend": {
+        "total": 61,
+        "auto_rate": 0.0
+      },
+      "multi_invoice": {
+        "total": 888,
+        "auto": 888,
+        "auto_rate": 1.0
+      },
+      "no_memo": {
+        "total": 1483,
+        "auto": 1258,
+        "auto_rate": 0.848
+      },
+      "ocr_letter_swap": {
+        "total": 348,
+        "auto": 347,
+        "auto_rate": 0.997
+      },
+      "overpayment": {
+        "total": 123,
+        "auto_rate": 0.0
+      },
+      "parent_company_payer": {
+        "total": 228,
+        "auto": 111,
+        "auto_rate": 0.487
+      },
+      "partial_payment": {
+        "total": 215,
+        "auto": 180,
+        "auto_rate": 0.837
+      },
+      "ref_format_variant": {
+        "total": 1489,
+        "auto": 1487,
+        "auto_rate": 0.999
+      }
+    }
+  },
+  "audit_chain": {
+    "ok": true,
+    "entries": 35215,
+    "head_hash": "222a21e9d2447a28c5e4f6d85a44c358633e75fea37c9df323b1b9ef69c28448",
+    "first_bad_position": null,
+    "reason": null,
+    "verify_s": 1.617
+  },
+  "replay": {
+    "ok": true,
+    "events_replayed": 55001,
+    "decisions_checked": 35215,
+    "mismatch_count": 0,
+    "elapsed_s": 3.398,
+    "events_per_s": 16187
+  },
+  "replay_matches_live_state": true
+}
