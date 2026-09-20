@@ -22,6 +22,7 @@ from ..config import load_settings
 from ..engine import BatchResult, Engine
 from ..events import EXCEPTION_RESOLVED, Event, canonical_json, derive_id
 from ..policy import POLICIES
+from ..processor import registry_from_env
 from . import queries
 
 log = logging.getLogger("ledgerloop")
@@ -47,7 +48,7 @@ def create_app(db_engine: DbEngine | None = None, start_consumer: bool | None = 
     async def lifespan(app: FastAPI):
         dbe = db_engine or db.make_engine(settings.database_url)
         db.init_db(dbe)
-        engine = Engine(dbe)
+        engine = Engine(dbe, registry=registry_from_env())
         boot = engine.boot()
         log.info("booted from log: %s", boot)
         app.state.db = dbe

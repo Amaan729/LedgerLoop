@@ -26,6 +26,17 @@ def default_registry() -> dict[str, ToolFn]:
     return {"remittance_parser": regex_remittance_parser}
 
 
+def registry_from_env() -> dict[str, ToolFn]:
+    """Regex parser unless LEDGERLOOP_LLM_PARSER=1 and an Anthropic key is set."""
+    import os
+
+    if os.getenv("LEDGERLOOP_LLM_PARSER") == "1" and os.getenv("ANTHROPIC_API_KEY"):
+        from .tools.llm_remittance import LLMRemittanceParser
+
+        return {"remittance_parser": LLMRemittanceParser(model=os.getenv("LEDGERLOOP_LLM_MODEL", "claude-haiku-4-5-20251001"))}
+    return default_registry()
+
+
 class Processor:
     def __init__(self, state: State, tools: RecordingTools, policy_for: Callable[[Event], Policy]) -> None:
         self.state = state
