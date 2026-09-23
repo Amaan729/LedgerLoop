@@ -1,7 +1,8 @@
 import { useState } from "react";
+import Exceptions from "./components/Exceptions";
 import Overview from "./components/Overview";
 
-const TABS = ["Overview"] as const;
+const TABS = ["Overview", "Exceptions"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function App() {
@@ -21,7 +22,10 @@ export default function App() {
           ))}
         </nav>
       </header>
-      <main>{tab === "Overview" && <Overview />}</main>
+      <main>
+        {tab === "Overview" && <Overview />}
+        {tab === "Exceptions" && <Exceptions />}
+      </main>
     </>
   );
 }
