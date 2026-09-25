@@ -1,8 +1,10 @@
 import { useState } from "react";
+import Audit from "./components/Audit";
 import Exceptions from "./components/Exceptions";
 import Overview from "./components/Overview";
+import Replay from "./components/Replay";
 
-const TABS = ["Overview", "Exceptions"] as const;
+const TABS = ["Overview", "Exceptions", "Audit", "Replay"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function App() {
@@ -25,6 +27,8 @@ export default function App() {
       <main>
         {tab === "Overview" && <Overview />}
         {tab === "Exceptions" && <Exceptions />}
+        {tab === "Audit" && <Audit />}
+        {tab === "Replay" && <Replay />}
       </main>
     </>
   );
