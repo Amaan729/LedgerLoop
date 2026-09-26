@@ -146,3 +146,6 @@ pre {
 .error { color: var(--bad); }
 .split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; }
 @media (max-width: 960px) { .split { grid-template-columns: 1fr; } }
+
+.scroll { max-height: calc(100vh - 150px); overflow: auto; }
+.sticky { position: sticky; top: 84px; align-self: start; max-height: calc(100vh - 110px); overflow: auto; }

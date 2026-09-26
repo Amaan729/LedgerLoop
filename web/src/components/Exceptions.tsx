@@ -32,6 +32,7 @@ export default function Exceptions() {
         {error && <p className="error">{error}</p>}
         {rows && rows.length === 0 && <p className="muted">Nothing here.</p>}
         {rows && rows.length > 0 && (
+          <div className="scroll">
           <table>
             <thead>
               <tr>
@@ -54,9 +55,10 @@ export default function Exceptions() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </section>
-      <section className="panel">
+      <section className="panel sticky">
         {selected ? (
           <Detail id={selected} onResolved={() => { refresh(); }} />
         ) : (

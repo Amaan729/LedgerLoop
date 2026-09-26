@@ -24,7 +24,7 @@ export default function Overview() {
         <Kpi label="open exceptions" value={m.exceptions_open.toLocaleString()} sub={`${m.exceptions_resolved.toLocaleString()} resolved by people`} />
         <Kpi
           label="engine throughput"
-          value={m.engine.events_per_busy_s ? `${m.engine.events_per_busy_s.toLocaleString()}/s` : "—"}
+          value={m.engine.events_per_busy_s ? `${m.engine.events_per_busy_s.toLocaleString()}/s` : "idle"}
           sub={`${m.engine.events_since_boot.toLocaleString()} events since boot · policy ${m.engine.policy}`}
         />
       </div>
