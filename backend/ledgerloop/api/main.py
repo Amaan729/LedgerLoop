@@ -70,7 +70,7 @@ def create_app(db_engine: DbEngine | None = None, start_consumer: bool | None = 
     app = FastAPI(title="LedgerLoop", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=os.getenv("LEDGERLOOP_CORS", "http://localhost:5173").split(","),
+        allow_origins=os.getenv("LEDGERLOOP_CORS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
         allow_methods=["*"],
         allow_headers=["*"],
     )
