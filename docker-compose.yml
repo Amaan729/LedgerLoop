@@ -1,0 +1,40 @@
+# Local stack: Postgres + Redis + API (with the stream consumer) + dashboard.
+#   docker compose up --build
+#   docker compose exec api python scripts/seed.py --to redis
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ledgerloop
+      POSTGRES_DB: ledgerloop
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
+  api:
+    build: ./backend
+    environment:
+      LEDGERLOOP_DATABASE_URL: postgresql+psycopg://postgres:ledgerloop@postgres/ledgerloop
+      LEDGERLOOP_REDIS_URL: redis://redis:6379/0
+      LEDGERLOOP_CONSUME: "1"
+      LEDGERLOOP_CORS: http://localhost:5173
+    ports: ["8000:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_API_URL: http://localhost:8000
+    ports: ["5173:5173"]
+    depends_on: [api]
