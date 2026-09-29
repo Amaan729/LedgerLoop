@@ -6,7 +6,7 @@ Order-to-cash automation with three agents running over an append-only event log
 - **risk** releases or holds each order against the customer's exposure
 - **cash** matches incoming payments to open invoices, working from messy remittance memos
 
-Every decision is written to a hash-chained audit log. Anything an agent isn't sure about goes to an exception queue for a person. The whole history can be replayed from the log to re-derive every decision bit-for-bit, or re-run under a different policy to see what would change before you ship it.
+Every decision is written to a hash-chained audit log. Design reasoning is in [docs/design.md](docs/design.md). Anything an agent isn't sure about goes to an exception queue for a person. The whole history can be replayed from the log to re-derive every decision bit-for-bit, or re-run under a different policy to see what would change before you ship it.
 
 ![overview](docs/img/overview.png)
 
